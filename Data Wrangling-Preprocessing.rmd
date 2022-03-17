@@ -1,0 +1,490 @@
+---
+author: "Hill Modi"
+title: "Data Wrangling (Data Preprocessing)"
+subtitle: Practical assessment
+date: 21st May, 2021
+output:
+  html_document: 
+    df_print: paged
+    fig_caption: yes
+    fig_height: 5
+    fig_width: 7
+    highlight: tango
+    keep_md: yes
+    number_sections: no
+    theme: readable
+    toc: yes
+    toc_depth: 4
+  pdf_document: default
+  html_notebook: default
+---
+
+# Required packages 
+
+```{r, echo = TRUE, warnings = FALSE, message=FALSE}
+# Importing the neccesary library
+library(readr) 
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(MVN)
+library(outliers)
+library(forecast)
+```
+
+
+# Executive Summary
+
+I used two datasets Happiness and Continets for the assignment, For preparaton, 
+
+first I read the datasets, and then merged them help of left_join() function with matched country name.
+
+After that, I checked the structure of dataset and type of column of merged dataset, there I found, continent is of character type, which should be of factor type, so I converted continents into unorder factors.
+
+Then I converted Untidy data into Tidy data with help of pivot_longer function, in which cols 4-9 is converted into one name criteria and their values are in one column criteria-score.
+
+After that, I create one variable called Dyspotia_Residual from score and Criteia variable.
+
+Then, I checked for missing and special values, which I manually replace.
+
+Then, I checked for the outliers with help of qq-plot, boxplot, Mahalonobis distance and histogram and handled them.
+
+At last, I transform Dyspotia_Residual variables into normal distributed and decrease its skewness, and transform criteria score of Generosity into normal distribution and decreased its skewness.
+
+# Data
+
+**Data Source**
+
+[Happiness](https://www.kaggle.com/unsdsn/world-happiness?select=2019.csv)
+
+[Continents](https://github.com/dbouquin/IS_608/blob/master/NanosatDB_munging/Countries-Continents.csv)
+
+I have taken happiness dataset from Kaggle Website, dataset is about Happiness Index of country from 2019 year, while second dataset Continents is taken from github and it tells us country belongs to which continents. Main objective of merging these two datasets is to obtain average Happiness Score in the Continent.
+
+```{r, include=FALSE}
+#Creating Table
+Happiness <- data.frame(
+  Features = c("Overall.rank",
+               "Country.or.region",
+               "Score",
+               "GDP.per.capita",
+               "Social.support",
+               "Healthy.life.expectancy",
+               "Freedom.to.make.life.choices",
+               "Generosity",
+               "Perceptions.of.corruption"),
+  Description = c("Rank of Happiness",
+                  "Country or Region Name",
+                  "Happiness Score",
+                  "extent to which GDP.per.capita factor contribute in evaluating the happiness in country",
+                  "extent to which Social.support factor contribute in evaluating the happiness in country",
+                  "extent to which Healthy.life.expectancy factor contribute in evaluating the happiness in country",
+                  "extent to which Freedom.to.make.life.choices factor contribute in evaluating the happiness in country",
+                  "extent to which Generosity factor contribute in evaluating the happiness in country",
+                  "extent to which Perceptions.of.corruption factor contribute in evaluating the happiness in country"
+                  ))
+
+
+Continent <- data.frame(
+  Features = c("Continent",
+               "Country"),
+  Description = c("Name of Continent",
+                  "Name of Country"))
+```
+
+**Data Description**
+
+**Happiness**
+```{r}
+kbl(Happiness) %>%
+  kable_paper()
+```
+
+**Continent**
+```{r}
+kbl(Continent) %>%
+  kable_paper()
+```
+
+**Read the Data**
+
+```{r}
+# read the data
+
+happiness <- read.csv("2019.csv",
+                           stringsAsFactors = FALSE)
+
+Continents <- read.csv("Countries-Continents.csv",
+                       stringsAsFactors = FALSE)
+```
+
+**Displaying head of two datasets**
+
+```{r}
+head(happiness)
+
+head(Continents)
+```
+
+**Merging Two Datasets**
+
+To Merge the dataset, I used left_join function from tidyr. As main objective of joining is to find the average Happiness Score in each continent, we are intreseted in only happiness country with their continents, so we must have all the columns from **happiness** and columns of continetns from **Continent** data with common value fo country.
+
+Here, country name is stored in `Country.or.region` variable in happiness data and in `Country` in Continents data.
+
+```{r}
+df <- happiness %>% left_join(Continents, c("Country.or.region" = "Country"))
+
+head(df)
+```
+
+# Understand
+
+```{r}
+# structure of data
+
+str(df)
+```
+
+After merging two datasets, I checked the structure of data, in which I found data type of Continent is character, but it should be factor, so I converted it into unordered factor, so we can easily classified which country belongs to which continents.
+
+As we have converted continents into factor, no other value for continents will be accepted.
+
+
+```{r}
+df$Continent <- factor(df$Continent, 
+                       levels = c("Africa","Asia","Europe","North America","Oceania","South America"),
+                       labels = c("Africa","Asia","Europe","North America","Oceania","South America"),
+                       ordered = FALSE)
+levels(df$Continent)
+```
+
+```{r}
+str(df)
+```
+
+We can see, continent is converted into 6 level factors.
+
+# Tidy & Manipulate Data I 
+
+Our dataset df is into untidy format, because **`GDP.per.capita`**, **`Social.support`**, **`Healthy.life.expectancy`**, **`Freedom.to.make.life.choices`**, **`Generosity`** and **`Perceptions.of.corruption`** are observation of each country that contribute to find **`Score`**, So I converted them into Tidy Format with pivot_longer function.
+
+I named column header as `criteria` for these columns and and their values is stored as `Criteria_score` for each country. 
+
+```{r}
+df <- df %>% pivot_longer(names_to = "Criteria", values_to = "Criteria_score", cols = 4:9)
+
+df$Criteria <- as.factor(df$Criteria)
+levels(df$Criteria)
+```
+These Criteria are also factors, so I converted them into factors which were characters prior.
+```{r}
+str(df)
+```
+
+```{r}
+head(df)
+```
+# Tidy & Manipulate Data II
+
+Equation of Happiness Score of each country is **`Dystopia_Residual + sum(Criteria_score)`**. 
+
+Here, we have score of each criteria and overall happiness score, so I mutate new column `Dystopia_Residual` for each country based on `Critera_score` and `score`.
+
+Here, term `Dystopia` is refers to the score of imaginary least happy country(1.85) and residuals is refers to the residuals values of each criteria of each country that are unexplained.
+
+So, `Dystopia_Residual` is simply sum of Dystopia and Residuals.
+
+```{r}
+df <- df %>% group_by(Country.or.region) %>% mutate(Dystopia_Residual = Score - sum(Criteria_score))
+df
+```
+# Scan I
+
+I scan whole dataset to find is there any missing value.
+
+```{r}
+sum(is.na(df))
+```
+
+From above, it looks like, there are total 90 missing values in dataset. So, now I am finding which column contains missing values with help of ColSums function.
+
+```{r}
+colSums(is.na(df))
+```
+
+It depicts that only Continet column has missing values, while rest columns records 0 NA.
+
+```{r}
+df[!complete.cases(df),] %>% select(Country.or.region, Continent) %>% unique()
+```
+
+So, now I try to find out which rows contains missing values, as we have 6 rows for every country, I used unique() function to find out excatly for which country we don't have continets in this data. 
+
+So, now we can replace this **`NA values`** with `mode` of the Continents values or we can simply omit these records with na.omit() function, but that would be unappropriate because, we have real world knowledge that United States belongs to `North America` continent ans so on.
+
+I checked into the Continent data, in which United States are written as US, so either we can change `US` to `United States` in continet dataset and mergeg them again, or we can manually replace these records.
+
+So, I replace manually.
+```{r}
+df$Continent[df$Country.or.region=="United States"] <- "North America"
+df$Continent[df$Country.or.region=="Czech Republic"] <- "Europe"
+df$Continent[df$Country.or.region=="Taiwan"] <- "Asia"
+df$Continent[df$Country.or.region=="Trinidad & Tobago"] <- "South America"
+df$Continent[df$Country.or.region=="Kosovo"] <- "Europe"
+df$Continent[df$Country.or.region=="South Korea"] <- "Asia"
+df$Continent[df$Country.or.region=="Northern Cyprus"] <- "Europe"
+df$Continent[df$Country.or.region=="Russia"] <- "Europe"
+df$Continent[df$Country.or.region=="Hong Kong"] <- "Asia"
+df$Continent[df$Country.or.region=="North Macedonia"] <- "Europe"
+df$Continent[df$Country.or.region=="Congo (Brazzaville)"] <- "Africa"
+df$Continent[df$Country.or.region=="Palestinian Territories"] <- "Asia"
+df$Continent[df$Country.or.region=="Burkina Faso"] <- "Africa"
+df$Continent[df$Country.or.region=="Congo (Kinshasa)"] <- "Africa"
+df$Continent[df$Country.or.region=="Myanmar"] <- "Asia"
+```
+
+After that, I checked is there any special value (**`infinity`**, **`NAN`** or **`na`**) into the numeric type columns. 
+
+```{r}
+NA_counts <- function(x)
+{
+  if (is.numeric(x)) (is.infinite(x) | is.nan(x) | is.na(x))
+}
+
+sapply(df, function(x) sum(NA_counts(x)))
+```
+
+I found, every column and record is complete in the dataset.
+
+
+# Scan II 
+
+I checked the outliers for the dataset.
+
+**One Variable**
+
+Here, df has repeated values for score and Dystopia_Residual, which might influece the histogram and boxplot, hence some outliers might not be seen or some good value would be appear as outlier, so I created on dataset numeric with only this two variables and used unique() function, so that observation will not be repeated.
+
+```{r}
+par(mar=c(1,1,1,1))
+
+numeric <- df[, c(3,7)] %>% unique()
+numeric
+```
+
+
+**Score**
+
+I will check for outliers through z-score, but for z-score varibale must be normally distributed, so first, I will check for normality.
+```{r}
+
+par(mfrow = c(1,2))
+
+hist(numeric$Score, 
+     ylab = "frequency",
+     xlab = "Happiness Score",
+     main = "Histogram of Happiness Score")
+
+qqnorm(numeric$Score)
+qqline(numeric$Score,
+       col="red",
+       lwd = 1,
+       lty = 2)
+
+par(mfrow = c(1,1))
+```
+
+Histogram of Score variable is almost normally distributed with only one unwanted spike between (6-7) score. QQ-plot is also looks good except at end, where it is going far away from qq-line. We will check for shapiro-wilk test.
+
+```{r}
+shapiro.test(numeric$Score)
+
+z.Score <- numeric$Score %>%  scores(type = "z")
+z.Score %>% summary()
+
+which(abs(z.Score) >3 )
+```
+P-value of shapiro-wilk test is > 0.05, so `score` is normally distributed, now I can check for z-score. From z-score, I can say that there is no outlier in the `score`.
+
+
+```{r}
+ggplot(data = df, mapping = aes(y = Score)) + 
+  geom_boxplot() + 
+  ggtitle("Boxplot of Happiness Score")
+```
+
+Boxplot is confirming our finding about outlier for `score`.
+
+**Dystopia_Residual**
+
+```{r}
+par(mfrow = c(1,2))
+
+hist(numeric$Dystopia_Residual, 
+     ylab = "frequency",
+     xlab = "Dystopia_Residual",
+     main = "Histogram of Dystopia_Residual")
+
+qqnorm(numeric$Dystopia_Residual)
+qqline(numeric$Dystopia_Residual,
+       col="red",
+       lwd = 1,
+       lty = 2)
+
+par(mfrow = c(1,1))
+```
+Histogram and QQ-plot of Dystopia_Residual is also looks like normally distributed. But, shapiro-wilk test is depicts that Dystopia_Residual is at the edge of normally distributed, hence I find z-score.
+
+```{r}
+shapiro.test(numeric$Dystopia_Residual)
+
+z.Score <- df$Score %>%  scores(type = "z")
+z.Score %>% summary()
+
+which(abs(z.Score) >3 )
+```
+No residuals are above the absolute level of 3 for Dystopia_Residual, hence there is no outlier in the `Dystopia_Residual`.
+
+```{r}
+ggplot(data = df, mapping = aes(y = Dystopia_Residual)) + 
+  geom_boxplot()
+```
+
+**Criteria_score**
+
+Criteria_score is for each criteria for respected country, so, I looked at boxplot of criteria_score for each criteria. 
+
+```{r}
+ggplot(data = df, mapping = aes(x = Criteria, y = Criteria_score)) + 
+  geom_boxplot()
+```
+From, boxplot, we can say that, GDP.per.capita has no outliers, but rest critera has few outliers, but before discarding them, first let us look at the other plots.
+
+**Two-Variable**
+```{r, warning=FALSE, message=FALSE}
+# Scatterplot
+ggplot(data = numeric) + 
+  geom_point(mapping = aes(x = Score, y = Dystopia_Residual)) +
+  geom_smooth(
+    mapping = aes(x = Score, y = Dystopia_Residual)
+  )
+
+```
+
+Scatterplot depicts there are some outliers at lower middle corner of plot, but, let's look at the chi-square qq-plot of Mahalonobis distance. 
+
+**Multivariate**
+```{r}
+par(mar=c(1,1,1,1))
+
+# mvn
+results <- mvn(data = numeric,
+               multivariateOutlierMethod = "quan", 
+               showOutliers = TRUE)
+```
+
+Above graph, depicts observation 1-8 are outliers, but by looking at the dataset, we know first 8 observation are for the country which have best happiness score, so we can't remove them.
+
+Hence, I will not remove outliers.
+
+# Transform
+
+**Dystopia_Residual**
+
+From above discussion, p-value of shapiro-wilk test of Dystopia_Residual is 0.052, so, there is slight skweness in the data, hence we can transform Dystopia_Residual to normal distribution with `boxcox`, `log base 10`, `natural log` etc. 
+```{r}
+par(mfrow = c(3,2))
+
+boxcox <- BoxCox(numeric$Dystopia_Residual,lambda = "auto") %>% round(3)
+hist(boxcox)
+
+log_dystopia <- log10(numeric$Dystopia_Residual)
+hist(log_dystopia)
+
+z_df <- scale(numeric$Dystopia_Residual, center = TRUE, scale = TRUE)
+hist(z_df)
+
+ln_dystopia <- log(numeric$Dystopia_Residual)
+hist(ln_dystopia)
+
+sqrt_dystopia <- sqrt(numeric$Dystopia_Residual)
+hist(sqrt_dystopia)
+
+center_df <-scale(numeric$Dystopia_Residual, center = TRUE, scale = FALSE)
+hist(center_df)
+
+par(mfrow = c(1,1))
+```
+
+So, I tried to transformed Dystopia_Residual into normal distriution by `boxcox, log10, natural log, z-score difference, square root and centering methods`. Above histograms are transformed histogram of Dystopia_Residual of each method. From this, histogram of box-cox lookes like normaly distributed. But, to confirm our finding, let's look at the shapiro-wilk test of each method.
+
+```{r}
+shapiro.test(boxcox)
+shapiro.test(log_dystopia)
+shapiro.test(z_df)
+shapiro.test(ln_dystopia)
+shapiro.test(sqrt_dystopia)
+shapiro.test(center_df)
+```
+As expected, p-value from boxcox transformation is highest(0.5915), which was 0.052 prior transformation.
+
+
+**Histogram of Each Criteria**
+```{r}
+par(mfrow = c(3,2))
+df_GDP <- df %>% filter(Criteria=="GDP.per.capita")
+hist(df_GDP$Criteria_score)
+
+df_social <- df %>% filter(Criteria=="Social.support")
+hist(df_social$Criteria_score)
+
+df_healthy <- df %>% filter(Criteria=="Healthy.life.expectancy")
+hist(df_healthy$Criteria_score)
+
+df_freedom <- df %>% filter(Criteria=="Freedom.to.make.life.choices")
+hist(df_freedom$Criteria_score)
+
+df_geno <- df %>% filter(Criteria=="Generosity")
+hist(df_geno$Criteria_score)
+
+df_corrupt <- df %>% filter(Criteria=="Perceptions.of.corruption")
+hist(df_corrupt$Criteria_score)
+
+par(mfrow = c(1,1))
+```
+
+From, above I tried to decrease skewness of Generosity with help of transformation.
+
+**Criteria = Generosity**
+
+I used the `z-score difference, square_root, centering methods` to transform Criteria_score of Generosity criteria.
+```{r}
+par(mfrow = c(3,1))
+
+z_df <- scale(df_geno$Criteria_score, center = TRUE, scale = TRUE)
+hist(z_df)
+
+sqrt_dystopia <- sqrt(df_geno$Criteria_score)
+hist(sqrt_dystopia)
+
+center_df <-scale(df_geno$Criteria_score, center = TRUE, scale = FALSE)
+hist(center_df)
+
+par(mfrow = c(1,1))
+```
+Above graphs shows us square_root transformation is best. Let's find this with help of shapiro-wilk test.
+
+```{r}
+shapiro.test(z_df)
+shapiro.test(sqrt_dystopia)
+shapiro.test(center_df)
+```
+square_root transformation has highest p-value 0.2999, which shows the Generosity criteria is tranformed into normal distribution.
+
+
+# References
+
+Courseware Modules(1-8) 
